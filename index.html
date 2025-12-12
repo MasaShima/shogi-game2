@@ -1,0 +1,1430 @@
+﻿<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>カスタム将棋</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      @import url("https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@700&display=swap");
+
+      body {
+        font-family: "Noto Serif JP", serif;
+        background-color: #222; /* 背景を少し暗くして盤面を際立たせる */
+        color: #ddd;
+        overscroll-behavior: none;
+      }
+
+      /* 将棋盤のスタイル */
+      .shogi-board {
+        display: grid;
+        grid-template-columns: repeat(9, 1fr);
+        gap: 1px;
+        background-color: #000;
+        border: 2px solid #555;
+        width: 100%;
+        max-width: 500px;
+        aspect-ratio: 9 / 10;
+        margin: 0 auto;
+        /* 背景画像設定用 */
+        background-size: cover;
+        background-position: center;
+        background-repeat: no-repeat;
+        position: relative;
+      }
+
+      /* 背景画像を暗くするためのオーバーレイ */
+      .shogi-board::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background-color: rgba(0, 0, 0, 0.3); /* 画像を少し暗くする */
+        pointer-events: none;
+        z-index: 0;
+      }
+
+      .cell {
+        /* マス目を半透明にして背景が見えるようにする */
+        background-color: rgba(238, 187, 85, 0.15);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        position: relative;
+        cursor: pointer;
+        user-select: none;
+        border: 1px solid rgba(255, 255, 255, 0.1); /* 薄い区切り線 */
+        z-index: 1; /* オーバーレイより上 */
+      }
+
+      .cell.highlight {
+        background-color: rgba(255, 221, 136, 0.6); /* 選択時は少し明るく */
+      }
+
+      .cell.last-move {
+        background-color: rgba(212, 172, 78, 0.6);
+      }
+
+      .cell.valid-move::after {
+        content: "";
+        position: absolute;
+        width: 20%;
+        height: 20%;
+        background-color: rgba(255, 50, 50, 0.6);
+        border-radius: 50%;
+        box-shadow: 0 0 5px rgba(255, 0, 0, 0.5);
+      }
+
+      /* 駒のスタイル */
+      .piece {
+        width: 85%;
+        height: 90%;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        font-size: clamp(12px, 4vw, 24px);
+        color: #000;
+        position: relative;
+        clip-path: polygon(50% 0%, 100% 20%, 85% 100%, 15% 100%, 0% 20%);
+        background-color: #ffcc66; /* 駒は不透明のまま */
+        box-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
+        transition: transform 0.2s;
+        z-index: 2;
+        /* 元の文字を下部に配置する設定を削除し、オーバーレイに任せる */
+        align-items: center;
+        padding-bottom: 0;
+      }
+
+      .piece.rotated {
+        transform: rotate(180deg);
+      }
+
+      .piece.promoted {
+        color: #d00;
+      }
+
+      /* 成駒のギザギザ模様の縁取りを追加 */
+      .piece.promoted::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        z-index: -1; /* 駒本体の下に配置 */
+        /* 将棋駒の形にクリップ */
+        clip-path: polygon(50% 0%, 100% 20%, 85% 100%, 15% 100%, 0% 20%);
+
+        /* ギザギザ模様のパターン (赤#f00, 黄#ff0) */
+        background-image: repeating-linear-gradient(
+          45deg,
+          #f00,
+          #f00 5px,
+          #ff0 5px,
+          #ff0 10px
+        );
+        background-size: cover; /* サイズを駒全体に合わせる */
+
+        /* 縁取りとして見せるために駒本体よりわずかに大きくする */
+        transform: scale(1.05); /* 駒より少し大きくする */
+        box-shadow: 0 0 5px rgba(255, 0, 0, 0.8);
+      }
+
+      /* カスタム画像モードの駒スタイル */
+      .piece.custom-image-mode {
+        background-color: transparent;
+        clip-path: none;
+        box-shadow: none;
+        position: relative; /* 子要素の絶対配置基準 */
+      }
+
+      .piece.custom-image-mode.promoted::before {
+        clip-path: none;
+        background-image: repeating-linear-gradient(
+          45deg,
+          #f00,
+          #f00 5px,
+          #ff0 5px,
+          #ff0 10px
+        );
+        background-size: cover;
+        transform: scale(1.05); /* 画像より少し大きくする */
+      }
+
+      .piece img {
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        filter: drop-shadow(2px 4px 6px black); /* 画像駒を見やすく */
+        position: absolute; /* 画像を占有 */
+        top: 0;
+        left: 0;
+        z-index: 1;
+      }
+
+      /* 駒の種類オーバーレイ（盤上） - 右上端に配置 */
+      .piece .piece-text-overlay {
+        position: absolute;
+        top: 2%; /* 上端から少し内側 */
+        right: 5%; /* 右端から少し内側 */
+        transform: none; /* 中央揃えを解除 */
+        font-size: clamp(8px, 1.5vw, 14px); /* サイズを小さく */
+        font-weight: bold;
+        color: rgba(255, 255, 255, 0.9);
+        text-shadow: 0 0 3px #000;
+        z-index: 5;
+        background-color: rgba(0, 0, 0, 0.4);
+        padding: 0 4px;
+        border-radius: 2px;
+        transition: transform 0.2s;
+        display: inline-block;
+        white-space: nowrap;
+      }
+
+      /* 後手の駒が回転している場合のテキストオーバーレイの調整 */
+      .piece.rotated .piece-text-overlay {
+        /* 駒全体が180度回転しているため、元の右上が左下になる。
+           テキストを元の右上（見た目上の左下）に戻すため、
+           逆回転させつつ位置を調整する。 */
+        top: 2%; /* 駒の最上部からの相対位置（回転後は最下部）*/
+        right: 5%;
+        /* 駒は180度回転しているので、オーバーレイの表示も180度回転させて文字を正立させる */
+        transform: rotate(180deg);
+      }
+
+      /* 画像駒モードのテキストオーバーレイ（画像の上に文字を重ねる） */
+      .piece.custom-image-mode .piece-text-overlay {
+        /* 画像モードでも位置とサイズは維持 */
+        background-color: rgba(0, 0, 0, 0.6);
+      }
+
+      /* --- 持ち駒台のスタイル --- */
+
+      /* 持ち駒台 */
+      .komadai {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+        background-color: #deb887;
+        padding: 8px;
+        min-height: 60px;
+        border-radius: 4px;
+        box-shadow: inset 0 0 10px rgba(0, 0, 0, 0.3);
+        align-items: center;
+        border: 1px solid #555;
+      }
+
+      .komadai-piece {
+        width: 35px;
+        height: 40px;
+        background-color: #ffcc66;
+        clip-path: polygon(50% 0%, 100% 20%, 85% 100%, 15% 100%, 0% 20%);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        font-size: 14px;
+        cursor: pointer;
+        position: relative;
+        margin-right: 5px;
+        color: #000;
+        /* 文字を下部に配置する設定を削除し、オーバーレイに任せる */
+        align-items: center;
+        padding-bottom: 0;
+      }
+
+      .komadai-piece.promoted {
+        color: #d00;
+      }
+
+      .komadai-piece .count {
+        position: absolute;
+        bottom: -5px;
+        right: -5px;
+        background: #d00;
+        color: #fff;
+        border-radius: 50%;
+        width: 16px;
+        height: 16px;
+        font-size: 10px;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        z-index: 10;
+        box-shadow: 1px 1px 2px rgba(0, 0, 0, 0.5);
+      }
+
+      .komadai-piece.selected {
+        background-color: #ff6666;
+        color: white;
+      }
+
+      .komadai-piece.custom-image-mode {
+        background-color: transparent;
+        clip-path: none;
+        padding-bottom: 0;
+      }
+
+      /* 駒の種類オーバーレイ（持ち駒台） - 右上端に配置 */
+      .komadai-piece .piece-text-overlay {
+        position: absolute;
+        top: 2px;
+        right: 2px;
+        transform: none; /* 中央揃えを解除 */
+        font-size: 9px; /* 持ち駒サイズをさらに小さく */
+        font-weight: bold;
+        color: rgba(255, 255, 255, 0.9);
+        text-shadow: 0 0 2px #000;
+        z-index: 5;
+        background-color: rgba(0, 0, 0, 0.6); /* 濃くして視認性アップ */
+        padding: 0 3px;
+        border-radius: 2px;
+        display: inline-block;
+        white-space: nowrap;
+      }
+
+      /* 設定モーダル内のレイアウト調整 */
+      .piece-config-group {
+        border: 1px solid #444;
+        padding: 10px;
+        border-radius: 6px;
+        background-color: #2a2a2a;
+      }
+      .config-item {
+        display: flex;
+        align-items: center;
+        margin-bottom: 8px;
+      }
+      .config-item > span {
+        width: 60px;
+        flex-shrink: 0;
+        font-size: 0.85rem;
+      }
+
+      /* モーダル */
+      .modal {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.7);
+        z-index: 100;
+        justify-content: center;
+        align-items: center;
+      }
+      .modal.active {
+        display: flex;
+      }
+      .modal-content {
+        background: #333;
+        color: #fff;
+        padding: 20px;
+        border-radius: 8px;
+        max-width: 90%;
+        max-height: 90vh;
+        overflow-y: auto;
+        width: 500px;
+        border: 1px solid #555;
+      }
+
+      .modal-content input[type="text"] {
+        background: #444;
+        color: #fff;
+        border: 1px solid #666;
+      }
+
+      .turn-indicator {
+        font-weight: bold;
+        padding: 5px 15px;
+        border-radius: 20px;
+        transition: all 0.3s;
+      }
+      .turn-sente {
+        background-color: #eee;
+        color: #111;
+      }
+      .turn-gote {
+        background-color: #111;
+        color: #eee;
+        border: 2px solid #eee;
+      }
+    </style>
+  </head>
+  <body class="flex flex-col items-center min-h-screen py-4">
+    <div
+      class="flex justify-between items-center w-full max-w-[500px] mb-2 px-2"
+    >
+      <h1 class="text-xl font-bold text-white">ブラウザ将棋</h1>
+      <button
+        onclick="openSettings()"
+        class="bg-gray-700 hover:bg-gray-600 text-white px-3 py-1 rounded text-sm border border-gray-500"
+      >
+        ⚙️ 画像設定
+      </button>
+    </div>
+
+    <div id="statusDisplay" class="mb-2 text-center">
+      <span id="turnIndicator" class="turn-indicator turn-sente"
+        >先手の手番</span
+      >
+    </div>
+
+    <div class="w-full max-w-[500px] mb-1">
+      <div class="text-sm mb-1 flex justify-between text-gray-300">
+        <span>後手 (Gote)</span>
+        <span id="gote-name">CPU (Demo)</span>
+      </div>
+      <div id="gote-hand" class="komadai"></div>
+    </div>
+
+    <div id="board" class="shogi-board"></div>
+
+    <div class="w-full max-w-[500px] mt-1">
+      <div class="text-sm mb-1 mt-2 text-gray-300">先手 (Sente)</div>
+      <div id="sente-hand" class="komadai"></div>
+    </div>
+
+    <div class="mt-4 flex gap-2">
+      <button
+        onclick="handleReset()"
+        class="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700"
+      >
+        対局リセット
+      </button>
+      <button
+        onclick="flipBoard()"
+        class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+      >
+        盤面反転
+      </button>
+    </div>
+
+    <div id="settingsModal" class="modal">
+      <div class="modal-content">
+        <h2 class="text-xl font-bold mb-4">画像カスタマイズ</h2>
+        <p class="text-sm text-gray-400 mb-4">
+          画像をアップロードするかURLを入力してください。<br />駒種ごとに先手・後手で異なる画像を設定できます。
+        </p>
+
+        <div id="imageSettingsList" class="space-y-4"></div>
+
+        <div class="mt-6 flex justify-end gap-2">
+          <button
+            onclick="closeSettings()"
+            class="px-4 py-2 rounded bg-gray-600 hover:bg-gray-500"
+          >
+            キャンセル
+          </button>
+          <button
+            onclick="saveSettings()"
+            class="px-4 py-2 rounded bg-green-600 text-white hover:bg-green-500"
+          >
+            保存して反映
+          </button>
+        </div>
+        <div class="mt-2 text-xs text-red-400 text-right">
+          ※大きな画像は保存できない場合があります。
+        </div>
+      </div>
+    </div>
+
+    <div id="promoteModal" class="modal">
+      <div class="modal-content text-center" style="width: 300px">
+        <h3 class="text-lg font-bold mb-4">成りますか？</h3>
+        <div class="flex justify-center gap-4">
+          <button
+            onclick="resolvePromotion(true)"
+            class="bg-blue-600 text-white px-6 py-2 rounded hover:bg-blue-500"
+          >
+            成る
+          </button>
+          <button
+            onclick="resolvePromotion(false)"
+            class="bg-gray-600 px-6 py-2 rounded hover:bg-gray-500"
+          >
+            成らない
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      // 定数定義
+      const PIECES = {
+        fu: { name: "歩", promote: "と", type: "fu", original: "fu" },
+        ky: { name: "香", promote: "成香", type: "ky", original: "ky" },
+        ke: { name: "桂", promote: "成桂", type: "ke", original: "ke" },
+        gi: { name: "銀", promote: "成銀", type: "gi", original: "gi" },
+        ki: { name: "金", promote: null, type: "ki", original: "ki" },
+        ka: { name: "角", promote: "馬", type: "ka", original: "ka" },
+        hi: { name: "飛", promote: "龍", type: "hi", original: "hi" },
+        ou: { name: "王", promote: null, type: "ou", original: "ou" },
+        to: { name: "と", original: "fu", type: "to", promote: null },
+        ny: { name: "成香", original: "ky", type: "ny", promote: null },
+        nk: { name: "成桂", original: "ke", type: "nk", promote: null },
+        ng: { name: "成銀", original: "gi", type: "ng", promote: null },
+        um: { name: "馬", original: "ka", type: "um", promote: null },
+        ry: { name: "龍", original: "hi", type: "ry", promote: null },
+      };
+
+      const pieceTypesForConfig = [
+        "fu",
+        "ky",
+        "ke",
+        "gi",
+        "ki",
+        "ka",
+        "hi",
+        "ou",
+        "to",
+        "ny",
+        "nk",
+        "ng",
+        "um",
+        "ry",
+      ];
+      const owners = [
+        { id: "sente", name: "先手" },
+        { id: "gote", name: "後手" },
+      ];
+
+      // 状態管理
+      let boardState = [];
+      let hands = { sente: {}, gote: {} };
+      let turn = "sente"; // sente or gote
+      let selectedCell = null; // {x, y} or {hand: 'sente', piece: 'fu'}
+      let validMoves = [];
+      let customImages = {}; // { sente_fu: 'url...', gote_fu: 'url...', board: 'url...' }
+      let isFlipped = false;
+      let pendingMove = null; // 成り判定用
+      let lastMove = null; // 最終移動マス {sx, sy, dx, dy}
+      let gameOver = false;
+      let winner = null;
+
+      // ローカルストレージから設定を読み込む
+      try {
+        const savedImages = localStorage.getItem("shogiCustomImages");
+        if (savedImages) {
+          customImages = JSON.parse(savedImages);
+        }
+      } catch (e) {
+        console.error("設定の読み込みに失敗しました", e);
+      }
+
+      // 初期配置
+      function initGame() {
+        // 盤面の初期化 (9x9)
+        boardState = Array(9)
+          .fill(null)
+          .map(() => Array(9).fill(null));
+
+        const setupRow = (row, owner, pieces) => {
+          pieces.forEach((p, i) => {
+            if (p)
+              boardState[row][i] = { type: p, owner: owner, promoted: false };
+          });
+        };
+
+        // 後手 (上側)
+        setupRow(0, "gote", [
+          "ky",
+          "ke",
+          "gi",
+          "ki",
+          "ou",
+          "ki",
+          "gi",
+          "ke",
+          "ky",
+        ]);
+        setupRow(1, "gote", [
+          null,
+          "hi",
+          null,
+          null,
+          null,
+          null,
+          null,
+          "ka",
+          null,
+        ]);
+        setupRow(2, "gote", Array(9).fill("fu"));
+
+        // 先手 (下側)
+        setupRow(6, "sente", Array(9).fill("fu"));
+        setupRow(7, "sente", [
+          null,
+          "ka",
+          null,
+          null,
+          null,
+          null,
+          null,
+          "hi",
+          null,
+        ]);
+        setupRow(8, "sente", [
+          "ky",
+          "ke",
+          "gi",
+          "ki",
+          "ou",
+          "ki",
+          "gi",
+          "ke",
+          "ky",
+        ]);
+
+        hands = { sente: {}, gote: {} };
+        turn = "sente";
+        selectedCell = null;
+        validMoves = [];
+        lastMove = null;
+        pendingMove = null;
+        isFlipped = false;
+        gameOver = false;
+        winner = null;
+
+        applyBoardImage();
+        updateStatus();
+        renderBoard();
+        renderHands();
+      }
+
+      function applyBoardImage() {
+        const boardEl = document.getElementById("board");
+        if (customImages.board) {
+          boardEl.style.backgroundImage = `url(${customImages.board})`;
+        } else {
+          boardEl.style.backgroundImage = "none";
+        }
+      }
+
+      /**
+       * 駒の画像キーを生成する (例: sente_fu, gote_to)
+       */
+      function getPieceImageKey(owner, typeKey) {
+        return `${owner}_${typeKey}`;
+      }
+
+      // --- レンダリング関連 ---
+
+      function renderBoard() {
+        const boardEl = document.getElementById("board");
+        boardEl.innerHTML = "";
+
+        // 盤面反転対応
+        const rows = isFlipped
+          ? [8, 7, 6, 5, 4, 3, 2, 1, 0]
+          : [0, 1, 2, 3, 4, 5, 6, 7, 8];
+        const cols = isFlipped
+          ? [0, 1, 2, 3, 4, 5, 6, 7, 8]
+          : [8, 7, 6, 5, 4, 3, 2, 1, 0];
+
+        // 盤面のマス目を生成
+        rows.forEach((y) => {
+          cols.forEach((x) => {
+            const cellEl = document.createElement("div");
+            cellEl.className = "cell";
+            cellEl.dataset.x = x;
+            cellEl.dataset.y = y;
+            cellEl.onclick = () => handleCellClick(x, y);
+
+            // 選択ハイライト
+            if (selectedCell && selectedCell.x === x && selectedCell.y === y) {
+              cellEl.classList.add("highlight");
+            }
+
+            // 移動可能ハイライト
+            if (validMoves.some((m) => m.x === x && m.y === y)) {
+              cellEl.classList.add("valid-move");
+            }
+
+            // 最終移動ハイライト
+            if (
+              lastMove &&
+              ((lastMove.sx === x && lastMove.sy === y) ||
+                (lastMove.dx === x && lastMove.dy === y))
+            ) {
+              cellEl.classList.add("last-move");
+            }
+
+            const piece = boardState[y][x];
+            if (piece) {
+              const pieceEl = document.createElement("div");
+              let typeKey = piece.type;
+
+              // 成り駒の場合、成った後の駒種キーに変換
+              if (piece.promoted) {
+                // 駒のタイプとPIECESのキーを比較し、成後のキーを取得
+                const promotedKey = Object.keys(PIECES).find(
+                  (key) =>
+                    PIECES[key].original === piece.type &&
+                    PIECES[key].promote === null &&
+                    PIECES[key].type !== piece.type
+                );
+                if (promotedKey) {
+                  typeKey = promotedKey;
+                }
+              }
+
+              const imageKey = getPieceImageKey(piece.owner, typeKey);
+              const shouldRotate = (piece.owner === "gote") !== isFlipped;
+
+              pieceEl.className = `piece ${piece.owner} ${
+                piece.promoted ? "promoted" : ""
+              } ${shouldRotate ? "rotated" : ""}`;
+
+              // 画像またはテキスト表示
+              if (customImages[imageKey]) {
+                pieceEl.classList.add("custom-image-mode");
+                const img = document.createElement("img");
+                img.src = customImages[imageKey];
+
+                // 画像モードの場合、テキストもオーバーレイで表示
+                const textOverlay = document.createElement("span");
+                textOverlay.className = "piece-text-overlay";
+                textOverlay.innerText = PIECES[typeKey].name;
+
+                pieceEl.appendChild(img);
+                pieceEl.appendChild(textOverlay);
+              } else {
+                // テキストモードの場合、テキストを直接駒要素の子として追加
+                const textSpan = document.createElement("span");
+                textSpan.className = "piece-text-overlay"; // CSSで右上配置が適用される
+                textSpan.innerText = PIECES[typeKey].name;
+                pieceEl.appendChild(textSpan);
+              }
+
+              cellEl.appendChild(pieceEl);
+            }
+
+            boardEl.appendChild(cellEl);
+          });
+        });
+      }
+
+      function renderHands() {
+        ["sente", "gote"].forEach((owner) => {
+          const handEl = document.getElementById(`${owner}-hand`);
+          handEl.innerHTML = "";
+          const handData = hands[owner];
+
+          // 持ち駒は通常駒（成っていない駒）のみ
+          Object.keys(handData)
+            // ��̓M��̍��炪�ł��Ȃ��悤�ɓK�p (���M������F�҂Ɓj
+            .filter((type) => PIECES[type] && type !== "ou")
+            .forEach((type) => {
+              const count = handData[type];
+              if (count > 0) {
+                const pieceEl = document.createElement("div");
+                pieceEl.className = "komadai-piece";
+                if (owner === "gote") pieceEl.classList.add("gote");
+
+                if (
+                  selectedCell &&
+                  selectedCell.hand === owner &&
+                  selectedCell.piece === type
+                ) {
+                  pieceEl.classList.add("selected");
+                }
+
+                const imageKey = getPieceImageKey(owner, type);
+
+                if (customImages[imageKey]) {
+                  pieceEl.classList.add("custom-image-mode");
+                  const img = document.createElement("img");
+                  img.src = customImages[imageKey];
+                  img.style.width = "100%";
+                  img.style.height = "100%";
+                  img.style.objectFit = "contain";
+
+                  const textOverlay = document.createElement("span");
+                  textOverlay.className = "piece-text-overlay";
+                  textOverlay.innerText = PIECES[type].name;
+
+                  pieceEl.appendChild(img);
+                  pieceEl.appendChild(textOverlay);
+                } else {
+                  // テキストモードの場合、テキストを直接駒要素の子として追加
+                  const textSpan = document.createElement("span");
+                  textSpan.className = "piece-text-overlay"; // CSSで右上配置が適用される
+                  textSpan.innerText = PIECES[type].name;
+                  pieceEl.appendChild(textSpan);
+                }
+
+                if (count > 1) {
+                  const countEl = document.createElement("span");
+                  countEl.className = "count";
+                  countEl.innerText = count;
+                  pieceEl.appendChild(countEl);
+                }
+
+                pieceEl.onclick = () => handleHandClick(owner, type);
+                handEl.appendChild(pieceEl);
+              }
+            });
+        });
+      }
+
+      function updateStatus() {
+        const ind = document.getElementById("turnIndicator");
+        if (gameOver) {
+          const msg = winner
+            ? `${winner === "sente" ? "先手" : "後手"}の勝ち`
+            : "対局終了";
+          ind.innerText = msg;
+          ind.className = "turn-indicator";
+          return;
+        }
+        ind.innerText = turn === "sente" ? "先手の手番" : "後手の手番";
+        ind.className = `turn-indicator ${
+          turn === "sente" ? "turn-sente" : "turn-gote"
+        }`;
+      }
+
+      // --- イベントハンドラ（再追加・修正） ---
+
+      /**
+       * 盤上のマスをクリックしたときの処理
+       */
+      function handleCellClick(x, y) {
+        if (gameOver) return;
+        const piece = boardState[y][x];
+
+        // 1. 駒の選択
+        if (piece && piece.owner === turn) {
+          // 自分の駒をクリック -> 選択/選択解除
+          if (selectedCell && selectedCell.x === x && selectedCell.y === y) {
+            // 既に選択済みなら解除
+            selectedCell = null;
+            validMoves = [];
+          } else {
+            // 新しく選択
+            selectedCell = { x, y };
+            // 持ち駒選択状態を解除
+            if (selectedCell.hand) selectedCell.hand = null;
+            calculateValidMoves(x, y, piece);
+          }
+          renderBoard();
+          renderHands();
+          return;
+        }
+
+        // 2. 移動の実行
+        if (selectedCell && selectedCell.x !== undefined) {
+          // 盤上の駒が選択されている場合
+          const move = validMoves.find((m) => m.x === x && m.y === y);
+          if (move) {
+            // 有効な移動先に移動
+            executeMove(selectedCell.x, selectedCell.y, x, y);
+            return;
+          }
+        } else if (selectedCell && selectedCell.hand) {
+          // 持ち駒が選択されている場合
+          if (canDrop(x, y, selectedCell.piece)) {
+            executeDrop(x, y, selectedCell.piece);
+            return;
+          }
+        }
+
+        // 3. 何も起こらない場合（無効な場所をクリック、相手の駒をクリックなど）
+        selectedCell = null;
+        validMoves = [];
+        renderBoard();
+        renderHands();
+      }
+
+      /**
+       * 持ち駒をクリックしたときの処理
+       */
+      function handleHandClick(owner, pieceType) {
+        if (gameOver) return;
+        if (owner !== turn) return; // 自分の手番でなければ選択不可
+
+        // 既に選択済みの持ち駒かチェック
+        const isSelected =
+          selectedCell &&
+          selectedCell.hand === owner &&
+          selectedCell.piece === pieceType;
+
+        if (isSelected) {
+          // 既に選択済みなら解除
+          selectedCell = null;
+          validMoves = [];
+        } else {
+          // 新しく選択
+          selectedCell = { hand: owner, piece: pieceType };
+          // 盤上の駒選択状態を解除
+          if (selectedCell.x !== undefined) selectedCell.x = null;
+
+          // 持ち駒を打てる有効なマス目を計算
+          validMoves = [];
+          for (let y = 0; y < 9; y++) {
+            for (let x = 0; x < 9; x++) {
+              if (canDrop(x, y, pieceType)) {
+                validMoves.push({ x, y });
+              }
+            }
+          }
+        }
+
+        renderBoard();
+        renderHands();
+      }
+
+      // --- ロジック関連 ---
+
+      /**
+       * 指定された座標の駒の有効な移動先を計算する
+       */
+      function calculateValidMoves(cx, cy, piece) {
+        validMoves = [];
+
+        // 成り駒の場合は、成った後の駒種キーを使用
+        let typeKey = piece.type;
+        if (piece.promoted) {
+          // 成った後の駒種キーを動的に取得
+          const promotedKey = Object.keys(PIECES).find(
+            (key) =>
+              PIECES[key].original === piece.type &&
+              PIECES[key].promote === null &&
+              PIECES[key].type !== piece.type
+          );
+          if (promotedKey) {
+            typeKey = promotedKey;
+          } else {
+            // 金や既に成っている駒など、成る前のキーと成った後のキーが同じ場合や、成れない駒の場合
+            typeKey = piece.type;
+          }
+        }
+
+        const moves = getMovesForType(typeKey, piece.owner);
+
+        moves.forEach((m) => {
+          let nx = cx + m.dx;
+          let ny = cy + m.dy;
+
+          if (!m.slide) {
+            // 一歩移動
+            if (nx >= 0 && nx < 9 && ny >= 0 && ny < 9) {
+              const target = boardState[ny][nx];
+              if (!target || target.owner !== piece.owner) {
+                validMoves.push({ x: nx, y: ny });
+              }
+            }
+          } else {
+            // 滑る動き (飛車、角、香車)
+            while (nx >= 0 && nx < 9 && ny >= 0 && ny < 9) {
+              const target = boardState[ny][nx];
+              if (!target) {
+                validMoves.push({ x: nx, y: ny });
+              } else {
+                if (target.owner !== piece.owner) {
+                  validMoves.push({ x: nx, y: ny });
+                }
+                break; // 駒に当たったら停止
+              }
+              nx += m.dx;
+              ny += m.dy;
+            }
+          }
+        });
+      }
+
+      /**
+       * 駒の種類と手番に基づいて可能な移動を返す
+       * @param {string} typeKey - 駒のキー (fu, to, ka, um, etc.)
+       * @param {string} owner - "sente" or "gote"
+       * @returns {Array<{dx: number, dy: number, slide: boolean}>}
+       */
+      function getMovesForType(typeKey, owner) {
+        const dir = owner === "sente" ? -1 : 1; // 先手は上(-1), 後手は下(1)
+
+        const moves = [];
+
+        switch (typeKey) {
+          case "fu": // 歩
+            moves.push({ dx: 0, dy: dir, slide: false });
+            break;
+          case "ky": // 香
+            moves.push({ dx: 0, dy: dir, slide: true });
+            break;
+          case "ke": // 桂
+            moves.push({ dx: 1, dy: dir * 2, slide: false });
+            moves.push({ dx: -1, dy: dir * 2, slide: false });
+            break;
+          case "gi": // 銀
+            moves.push({ dx: 0, dy: dir, slide: false });
+            moves.push({ dx: 1, dy: dir, slide: false });
+            moves.push({ dx: -1, dy: dir, slide: false });
+            moves.push({ dx: 1, dy: -dir, slide: false });
+            moves.push({ dx: -1, dy: -dir, slide: false });
+            break;
+          case "ki": // 金 / 成金相当の動き
+          case "to": // と金
+          case "ny": // 成香
+          case "nk": // 成桂
+          case "ng": // 成銀
+            moves.push({ dx: 0, dy: dir, slide: false });
+            moves.push({ dx: 1, dy: dir, slide: false });
+            moves.push({ dx: -1, dy: dir, slide: false });
+            moves.push({ dx: 1, dy: 0, slide: false });
+            moves.push({ dx: -1, dy: 0, slide: false });
+            moves.push({ dx: 0, dy: -dir, slide: false });
+            break;
+          case "ka": // 角
+            moves.push({ dx: 1, dy: 1, slide: true });
+            moves.push({ dx: 1, dy: -1, slide: true });
+            moves.push({ dx: -1, dy: 1, slide: true });
+            moves.push({ dx: -1, dy: -1, slide: true });
+            break;
+          case "hi": // 飛車
+            moves.push({ dx: 1, dy: 0, slide: true });
+            moves.push({ dx: -1, dy: 0, slide: true });
+            moves.push({ dx: 0, dy: 1, slide: true });
+            moves.push({ dx: 0, dy: -1, slide: true });
+            break;
+          case "ou": // 王
+            moves.push({ dx: 0, dy: dir, slide: false });
+            moves.push({ dx: 1, dy: dir, slide: false });
+            moves.push({ dx: -1, dy: dir, slide: false });
+            moves.push({ dx: 1, dy: 0, slide: false });
+            moves.push({ dx: -1, dy: 0, slide: false });
+            moves.push({ dx: 0, dy: -dir, slide: false });
+            moves.push({ dx: 1, dy: -dir, slide: false });
+            moves.push({ dx: -1, dy: -dir, slide: false });
+            break;
+          case "um": // 馬 (成角)
+            moves.push({ dx: 1, dy: 1, slide: true });
+            moves.push({ dx: 1, dy: -1, slide: true });
+            moves.push({ dx: -1, dy: 1, slide: true });
+            moves.push({ dx: -1, dy: -1, slide: true });
+            // 王と同じように斜め以外に1マス動ける
+            moves.push({ dx: 1, dy: 0, slide: false });
+            moves.push({ dx: -1, dy: 0, slide: false });
+            moves.push({ dx: 0, dy: 1, slide: false });
+            moves.push({ dx: 0, dy: -1, slide: false });
+            break;
+          case "ry": // 龍 (成飛)
+            moves.push({ dx: 1, dy: 0, slide: true });
+            moves.push({ dx: -1, dy: 0, slide: true });
+            moves.push({ dx: 0, dy: 1, slide: true });
+            moves.push({ dx: 0, dy: -1, slide: true });
+            // 王と同じように直線以外に1マス動ける
+            moves.push({ dx: 1, dy: 1, slide: false });
+            moves.push({ dx: 1, dy: -1, slide: false });
+            moves.push({ dx: -1, dy: 1, slide: false });
+            moves.push({ dx: -1, dy: -1, slide: false });
+            break;
+        }
+
+        return moves;
+      }
+
+      /**
+       * 打ちたい場所に駒を打てるかチェックする
+       * @param {number} x - 目的地x座標
+       * @param {number} y - 目的地y座標
+       * @param {string} pieceType - 駒種 (fu, ky, ke, gi, ki, ka, hi)
+       * @returns {boolean}
+       */
+      function canDrop(x, y, pieceType) {
+        // 目的地が空であること
+        if (boardState[y][x] !== null) return false;
+
+        const owner = turn;
+
+        // 二歩チェック (歩のみ)
+        if (pieceType === "fu") {
+          for (let row = 0; row < 9; row++) {
+            const existing = boardState[row][x];
+            if (
+              existing &&
+              existing.owner === owner &&
+              existing.type === "fu" &&
+              !existing.promoted
+            ) {
+              return false; // 同じ筋に自分の歩がある
+            }
+          }
+        }
+
+        // 行き所のない駒チェック
+        // 歩・香は最終段(0段/8段)に打てない
+        if (pieceType === "fu" || pieceType === "ky") {
+          const finalRank = owner === "sente" ? 0 : 8;
+          if (y === finalRank) return false;
+        }
+
+        // 桂馬は最終二段(0, 1段/8, 7段)に打てない
+        if (pieceType === "ke") {
+          if (owner === "sente" && (y === 0 || y === 1)) return false;
+          if (owner === "gote" && (y === 8 || y === 7)) return false;
+        }
+
+        // 打ち歩詰めチェック（ここでは簡略化のため省略。詰み判定は複雑なため）
+
+        return true;
+      }
+
+      /**
+       * 駒を移動する
+       * @param {number} sx - 選択元x座標
+       * @param {number} sy - 選択元y座標
+       * @param {number} dx - 移動先x座標
+       * @param {number} dy - 移動先y座標
+       */
+      function executeMove(sx, sy, dx, dy) {
+        if (gameOver) return;
+        const piece = boardState[sy][sx];
+        const captured = boardState[dy][dx]; // 移動先の駒
+
+        // 相手の駒を取る場合
+        if (captured) {
+          capturePiece(captured);
+        }
+
+        // 駒を移動
+        boardState[dy][dx] = piece;
+        boardState[sy][sx] = null;
+
+        // 王を取ったら即終了
+        if (captured && captured.type === "ou") {
+          lastMove = { sx, sy, dx, dy };
+          endGame(piece.owner);
+          return;
+        }
+
+        // 成り判定
+        const canPromote =
+          !piece.promoted && PIECES[piece.type].promote !== null; // 成りを持たない駒ではない
+
+        const inPromotionZone =
+          (piece.owner === "sente" && (sy <= 2 || dy <= 2)) ||
+          (piece.owner === "gote" && (sy >= 6 || dy >= 6));
+
+        // 成りが強制される場所のチェック
+        const forcedPromote =
+          canPromote &&
+          ((piece.owner === "sente" && dy === 0) || // 先手が最終段
+            (piece.owner === "gote" && dy === 8) || // 後手が最終段
+            (piece.type === "ke" && piece.owner === "sente" && dy <= 1) || // 桂馬の最終二段
+            (piece.type === "ke" && piece.owner === "gote" && dy >= 7) ||
+            (piece.type === "ky" && piece.owner === "sente" && dy === 0) || // 香車の最終段
+            (piece.type === "ky" && piece.owner === "gote" && dy === 8));
+
+        // 成り判定モーダル表示の条件
+        if (canPromote && inPromotionZone && !forcedPromote) {
+          // 成り選択が必要
+          pendingMove = { sx, sy, dx, dy };
+          document.getElementById("promoteModal").classList.add("active");
+          selectedCell = null;
+          validMoves = [];
+          // renderBoard, renderHands, updateStatus は resolvePromotion() で実行
+          return;
+        }
+
+        // 成りが強制される場合
+        if (forcedPromote) {
+          piece.promoted = true;
+        }
+
+        lastMove = { sx, sy, dx, dy };
+
+        endTurn();
+      }
+
+      /**
+       * 成り判定を解決する
+       * @param {boolean} promote - 成るかどうか
+       */
+      function resolvePromotion(promote) {
+        const { sx, sy, dx, dy } = pendingMove;
+        const piece = boardState[dy][dx]; // 既に移動済みの駒
+
+        if (promote) {
+          piece.promoted = true;
+        }
+
+        lastMove = { sx, sy, dx, dy };
+
+        document.getElementById("promoteModal").classList.remove("active");
+        pendingMove = null;
+        endTurn();
+      }
+
+      /**
+       * 駒を打つ
+       * @param {number} x - 目的地x座標
+       * @param {number} y - 目的地y座標
+       * @param {string} pieceType - 打つ駒種
+       */
+      function executeDrop(x, y, pieceType) {
+        if (gameOver) return;
+        // 持ち駒から削除
+        hands[turn][pieceType]--;
+
+        // 盤面に配置
+        boardState[y][x] = {
+          type: pieceType,
+          owner: turn,
+          promoted: false,
+        };
+
+        lastMove = { sx: null, sy: null, dx: x, dy: y }; // 打ち込みは開始マスなし
+
+        // 打ち終わりにターンエンド
+        endTurn();
+      }
+
+      /**
+       * 駒を取る
+       * @param {object} capturedPiece - 取られた駒オブジェクト
+       */
+      function capturePiece(capturedPiece) {
+        // 駒のタイプを元に戻す (成駒を元に戻す)
+        let originalType = capturedPiece.type;
+
+        if (capturedPiece.promoted) {
+          // 成り駒の場合は original プロパティを持つ元の駒種に戻す
+          originalType = PIECES[capturedPiece.type].original;
+        }
+
+        // 持ち駒に追加
+        hands[turn][originalType] = (hands[turn][originalType] || 0) + 1;
+      }
+
+      function endGame(winnerSide) {
+        gameOver = true;
+        winner = winnerSide;
+        pendingMove = null;
+        document.getElementById("promoteModal").classList.remove("active");
+        const message = `${winner === "sente" ? "先手" : "後手"}の勝ち`;
+        alert(message);
+        updateStatus();
+        renderBoard();
+        renderHands();
+      }
+
+      /**
+       * ターンを終了し、状態をリセットする
+       */
+      function endTurn() {
+        if (gameOver) return;
+        turn = turn === "sente" ? "gote" : "sente";
+        selectedCell = null;
+        validMoves = [];
+        updateStatus();
+        renderBoard();
+        renderHands();
+      }
+
+      function flipBoard() {
+        isFlipped = !isFlipped;
+        renderBoard();
+        renderHands();
+      }
+
+      // --- 設定モーダル関連（変更なし） ---
+
+      /**
+       * Base64データをBlobに変換するユーティリティ関数
+       */
+      function dataURItoBlob(dataURI) {
+        const byteString = atob(dataURI.split(",")[1]);
+        const mimeString = dataURI.split(",")[0].split(":")[1].split(";")[0];
+        const ab = new ArrayBuffer(byteString.length);
+        const ia = new Uint8Array(ab);
+        for (let i = 0; i < byteString.length; i++) {
+          ia[i] = byteString.charCodeAt(i);
+        }
+        return new Blob([ab], { type: mimeString });
+      }
+
+      /**
+       * 画像URL入力フィールドを作成する
+       */
+      function createUrlInput(key, fileInput) {
+        const urlInput = document.createElement("input");
+        urlInput.type = "text";
+        urlInput.placeholder = "画像URL (例: https://...)";
+        urlInput.dataset.key = key;
+        urlInput.className =
+          "w-full p-1 rounded bg-gray-600 text-white text-sm";
+        urlInput.value = customImages[key] || "";
+
+        // URL入力がある場合はファイル入力を無効化する
+        urlInput.oninput = () => {
+          if (urlInput.value.trim()) {
+            fileInput.disabled = true;
+          } else {
+            fileInput.disabled = false;
+          }
+        };
+
+        return urlInput;
+      }
+
+      /**
+       * ファイル入力フィールドを作成する
+       */
+      function createFileUploader(key, urlInput) {
+        const fileInput = document.createElement("input");
+        fileInput.type = "file";
+        fileInput.accept = "image/*";
+        fileInput.className = "w-full text-sm mt-1";
+
+        // URL入力がある場合はファイル入力を無効化
+        if (urlInput.value.trim()) {
+          fileInput.disabled = true;
+        }
+
+        // ファイルを選択した時の処理
+        fileInput.onchange = (e) => {
+          const file = e.target.files[0];
+          if (file) {
+            const reader = new FileReader();
+            reader.onload = (event) => {
+              // Base64形式のData URLをURL入力フィールドに設定
+              urlInput.value = event.target.result;
+              urlInput.dispatchEvent(new Event("input")); // 入力イベントを発生させて fileInput.disabled を更新
+            };
+            reader.readAsDataURL(file);
+          }
+        };
+
+        return fileInput;
+      }
+
+      /**
+       * 画像設定モーダルを開く
+       */
+      function openSettings() {
+        const list = document.getElementById("imageSettingsList");
+        list.innerHTML = "";
+
+        // 盤面画像設定
+        const boardGroup = document.createElement("div");
+        boardGroup.className = "piece-config-group mb-4";
+        const boardKey = "board";
+        boardGroup.innerHTML = `<h3 class="font-semibold mb-2 text-lg">盤面背景画像</h3>`;
+
+        const boardUrlInput = createUrlInput(
+          boardKey,
+          document.createElement("input")
+        ); // ダミーのfileInput
+        boardUrlInput.placeholder = "盤面背景画像URL";
+        const boardFileInput = createFileUploader(boardKey, boardUrlInput);
+
+        boardGroup.appendChild(boardUrlInput);
+        boardGroup.appendChild(boardFileInput);
+        list.appendChild(boardGroup);
+
+        // 駒画像設定
+        pieceTypesForConfig.forEach((typeKey) => {
+          const pieceName = PIECES[typeKey].name;
+          const group = document.createElement("div");
+          group.className = "piece-config-group";
+          group.innerHTML = `<h3 class="font-semibold mb-2 text-lg">${pieceName} (${typeKey}) の画像設定</h3>`;
+
+          owners.forEach((owner) => {
+            const imageKey = getPieceImageKey(owner.id, typeKey);
+
+            const item = document.createElement("div");
+            item.className = "config-item flex-col items-start";
+
+            const labelLine = document.createElement("div");
+            labelLine.className = "text-sm mb-1";
+            labelLine.innerText = `${owner.name}の駒`;
+
+            // ファイル入力とURL入力を関連付けるために関数を呼び出す
+            const urlInput = createUrlInput(
+              imageKey,
+              document.createElement("input")
+            ); // プレースホルダーとしてfileInput
+            const fileInput = createFileUploader(imageKey, urlInput); // 正しいfileInput
+
+            // createUrlInputを再度呼び出して、正しいfileInputと関連付ける
+            const finalUrlInput = createUrlInput(imageKey, fileInput);
+
+            item.appendChild(labelLine);
+            item.appendChild(finalUrlInput);
+            item.appendChild(fileInput);
+            group.appendChild(item);
+          });
+
+          list.appendChild(group);
+        });
+
+        document.getElementById("settingsModal").classList.add("active");
+      }
+
+      function closeSettings() {
+        document.getElementById("settingsModal").classList.remove("active");
+      }
+
+      function saveSettings() {
+        const inputs = document.querySelectorAll(
+          '#imageSettingsList input[type="text"]'
+        );
+        inputs.forEach((input) => {
+          const key = input.dataset.key;
+          const val = input.value.trim();
+          if (val) {
+            customImages[key] = val;
+          } else {
+            delete customImages[key];
+          }
+        });
+
+        try {
+          localStorage.setItem(
+            "shogiCustomImages",
+            JSON.stringify(customImages)
+          );
+        } catch (e) {
+          // confirm() の代わりにカスタムモーダルを使用することを推奨しますが、今回は簡略化のため console.error を使用
+          console.error(
+            "画像データのサイズが大きすぎて保存できませんでした。画像を小さくするか、URL指定にしてください。",
+            e
+          );
+        }
+
+        closeSettings();
+        applyBoardImage(); // 盤面背景画像を更新
+        renderBoard();
+        renderHands();
+      }
+
+      // --- 初期化 ---
+      window.onload = function () {
+        // PIECES定義を修正: 成り駒にも original と promote: null を追加
+        // renderBoard の成駒判定ロジックを修正し、PIECES定義から成後のキーを正しく取得するようにした
+        initGame();
+      };
+
+      // confirm() の代わりにカスタムモーダルを使用することを推奨しますが、今回は簡略化のため window.confirm を使用
+      function confirm(message) {
+        return window.confirm(message);
+      }
+
+      // リセットボタン用ハンドラ（確実に初期化）
+      function handleReset() {
+        if (
+          !window.confirm(
+            "対局をリセットしますか？現在の盤面状態は失われます。"
+          )
+        ) {
+          return;
+        }
+
+        // ★ 修正箇所：ページを再読み込みすることで、ゲーム状態を完全にリセットします。
+        location.reload();
+      }
+    </script>
+  </body>
+</html>
